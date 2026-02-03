@@ -18,7 +18,7 @@ const MetronomeUI = () => {
     const [bpm, setBpm] = useState(120);
     const [isPlaying, setIsPlaying] = useState(false);
     const [beatsPerCycle, setBeatsPerCycle] = useState(4);
-    const [currentStep, setCurrentStep] = useState(-1); // For visualizer
+    const [currentStep, setCurrentStep] = useState(-1); 
     const [isDragging, setIsDragging] = useState(false);
     
     // Presets State
@@ -28,15 +28,28 @@ const MetronomeUI = () => {
     // Grid State
     const [grid, setGrid] = useState(DEFAULT_PRESET.grid);
 
-    // Refs
+    // --- Refs (Crucial for Live Updates) ---
+    // These hold the "Live" values that the audio scheduler reads immediately
+    const bpmRef = useRef(bpm);
+    const gridRef = useRef(grid);
+    const beatsRef = useRef(beatsPerCycle);
+    const isPlayingRef = useRef(isPlaying); // To stop the recursive loop safely
+
     const lastMousePos = useRef({ x: 0, y: 0 });
     const audioCtxRef = useRef(null);
     const nextNoteTimeRef = useRef(0);
     const timerIDRef = useRef(null);
-    const stepRef = useRef(0); // Mutable ref to track step inside audio loop
-    const fileInputRef = useRef(null); // For importing JSON
+    const stepRef = useRef(0);
+    const fileInputRef = useRef(null);
 
-    // --- Audio Engine (Synthesizer) ---
+    // --- Sync State to Refs ---
+    // Whenever state changes, update the Refs so the audio loop sees it instantly
+    useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+    useEffect(() => { gridRef.current = grid; }, [grid]);
+    useEffect(() => { beatsRef.current = beatsPerCycle; }, [beatsPerCycle]);
+    useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+
+    // --- Audio Engine ---
     const initAudio = () => {
         if (!audioCtxRef.current) {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -71,7 +84,6 @@ const MetronomeUI = () => {
         } else if (type === 'hat') {
             osc.type = 'square';
             osc.frequency.setValueAtTime(800, time);
-            // Quick decay for a "tick" sound
             gain.gain.setValueAtTime(0.3, time);
             gain.gain.exponentialRampToValueAtTime(0.01, time + 0.05);
             osc.start(time);
@@ -79,35 +91,42 @@ const MetronomeUI = () => {
         }
     };
 
-    // --- Scheduler (Lookahead) ---
+    // --- Scheduler ---
     const scheduleNote = (stepNumber, time) => {
-        // 1. Play Audio
-        if (grid[`high-${stepNumber}`]) playSound('hat', time);
-        if (grid[`mid-${stepNumber}`]) playSound('snare', time);
-        if (grid[`low-${stepNumber}`]) playSound('kick', time);
+        // Read from Ref to get the LATEST grid state immediately
+        const currentGrid = gridRef.current; 
 
-        // 2. Schedule Visual Update (using setTimeout to sync with audio time)
-        // We use a separate drawing loop logic or just simple timeout synchronization
+        if (currentGrid[`high-${stepNumber}`]) playSound('hat', time);
+        if (currentGrid[`mid-${stepNumber}`]) playSound('snare', time);
+        if (currentGrid[`low-${stepNumber}`]) playSound('kick', time);
+
+        // Visual Sync
         const visualDelay = (time - audioCtxRef.current.currentTime) * 1000;
         setTimeout(() => {
-            setCurrentStep(stepNumber);
+            // Only update visual if we are still playing
+            if (isPlayingRef.current) {
+                setCurrentStep(stepNumber);
+            }
         }, Math.max(0, visualDelay));
     };
 
     const scheduler = () => {
-        // While there are notes that will need to play before the next interval, schedule them
-        const secondsPerBeat = 60.0 / bpm;
-        const lookahead = 25.0; // How frequently to call scheduling function (in milliseconds)
-        const scheduleAheadTime = 0.1; // How far ahead to schedule audio (sec)
+        // Read from Ref to get LATEST BPM immediately
+        const secondsPerBeat = 60.0 / bpmRef.current; 
+        const lookahead = 25.0; 
+        const scheduleAheadTime = 0.1; 
 
-        while (nextNoteTimeRef.current < audioCtxRef.current.currentTime + scheduleAheadTime) {
-            scheduleNote(stepRef.current, nextNoteTimeRef.current);
-            
-            // Advance time and step
-            nextNoteTimeRef.current += secondsPerBeat;
-            stepRef.current = (stepRef.current + 1) % beatsPerCycle;
+        if (isPlayingRef.current) {
+            while (nextNoteTimeRef.current < audioCtxRef.current.currentTime + scheduleAheadTime) {
+                scheduleNote(stepRef.current, nextNoteTimeRef.current);
+                
+                nextNoteTimeRef.current += secondsPerBeat;
+                
+                // Read from Ref to handle dynamic beat count changes
+                stepRef.current = (stepRef.current + 1) % beatsRef.current;
+            }
+            timerIDRef.current = setTimeout(scheduler, lookahead);
         }
-        timerIDRef.current = setTimeout(scheduler, lookahead);
     };
 
     // --- Play/Stop Logic ---
@@ -125,12 +144,7 @@ const MetronomeUI = () => {
         return () => clearTimeout(timerIDRef.current);
     }, [isPlaying]);
 
-    // Update scheduler if BPM changes while playing? 
-    // The lookahead function uses current BPM state automatically on next loop.
-
     // --- Preset & File Logic ---
-
-    // Load Preset
     const handlePresetChange = (e) => {
         const id = e.target.value;
         const preset = presets.find(p => p.id === id);
@@ -139,28 +153,27 @@ const MetronomeUI = () => {
             setBpm(preset.bpm);
             setBeatsPerCycle(preset.beatsPerCycle);
             setGrid(preset.grid);
-            setIsPlaying(false); // Stop when changing presets
+            // Optionally stop when changing presets, or keep playing:
+            setIsPlaying(false); 
         }
     };
 
-    // Store (+)
     const handleSavePreset = () => {
         const name = prompt("Enter preset name:", "My Cool Beat");
         if (!name) return;
         
         const newPreset = {
-            id: Date.now().toString(), // Simple unique ID
+            id: Date.now().toString(),
             name: name,
             bpm: bpm,
             beatsPerCycle: beatsPerCycle,
-            grid: { ...grid } // Deep copy grid
+            grid: { ...grid }
         };
 
         setPresets([...presets, newPreset]);
         setSelectedPresetId(newPreset.id);
     };
 
-    // Delete (Trash)
     const handleDeletePreset = () => {
         if (presets.length <= 1) {
             alert("Cannot delete the last preset.");
@@ -169,7 +182,6 @@ const MetronomeUI = () => {
         if (confirm("Delete this preset?")) {
             const newPresets = presets.filter(p => p.id !== selectedPresetId);
             setPresets(newPresets);
-            // Load the first available one
             const next = newPresets[0];
             setSelectedPresetId(next.id);
             setBpm(next.bpm);
@@ -178,23 +190,20 @@ const MetronomeUI = () => {
         }
     };
 
-    // Export (Disk In)
     const handleExport = () => {
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(presets));
         const downloadAnchorNode = document.createElement('a');
         downloadAnchorNode.setAttribute("href", dataStr);
         downloadAnchorNode.setAttribute("download", "metronome_presets.json");
-        document.body.appendChild(downloadAnchorNode); // required for firefox
+        document.body.appendChild(downloadAnchorNode);
         downloadAnchorNode.click();
         downloadAnchorNode.remove();
     };
 
-    // Import (Disk Out) Trigger
     const triggerImport = () => {
         fileInputRef.current.click();
     };
 
-    // Handle File Read
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -204,12 +213,12 @@ const MetronomeUI = () => {
                 const loadedPresets = JSON.parse(event.target.result);
                 if (Array.isArray(loadedPresets) && loadedPresets.length > 0) {
                     setPresets(loadedPresets);
-                    // Load first one
                     const first = loadedPresets[0];
                     setSelectedPresetId(first.id);
                     setBpm(first.bpm);
                     setBeatsPerCycle(first.beatsPerCycle);
                     setGrid(first.grid);
+                    setIsPlaying(false);
                 } else {
                     alert("Invalid JSON format");
                 }
@@ -219,7 +228,6 @@ const MetronomeUI = () => {
         };
         reader.readAsText(file);
     };
-
 
     // --- Interaction Logic (Dial) ---
     const updateBpmFromDelta = (clientX, clientY) => {
@@ -460,7 +468,7 @@ const MetronomeUI = () => {
             borderRadius: '4px', cursor: 'pointer',
             border: active ? `1px solid ${color}` : (isCurrentStep ? '1px solid #666' : '1px solid #333'),
             boxShadow: active ? `0 0 10px ${color}66` : 'none',
-            transition: 'background 0.05s', // fast transition for playhead
+            transition: 'background 0.05s', 
             opacity: isCurrentStep && !active ? 0.5 : 1
         }),
     };
@@ -484,19 +492,15 @@ const MetronomeUI = () => {
                     ))}
                 </select>
                 <div style={{display: 'flex'}}>
-                    {/* Store (Add) */}
                     <button style={styles.buttonGhost} title="Store Preset" onClick={handleSavePreset}>
                         <IconStore />
                     </button>
-                    {/* Delete (Trash) */}
                     <button style={styles.buttonGhost} title="Delete Preset" onClick={handleDeletePreset}>
                         <IconTrash />
                     </button>
-                    {/* Export (Arrow Left to Disk) */}
                     <button style={styles.buttonGhost} title="Export to File" onClick={handleExport}>
                         <IconExport />
                     </button>
-                    {/* Import (Arrow Right out of Disk) */}
                     <button style={styles.buttonGhost} title="Import from File" onClick={triggerImport}>
                         <IconImport />
                     </button>
