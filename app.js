@@ -4,15 +4,15 @@ const MetronomeUI = () => {
     // --- Configuration ---
     const MIN_BPM = 30;
     const MAX_BPM = 250;
-    const STORAGE_KEY = 'metronome_data_v2'; // Bumped version to v2
+    const STORAGE_KEY = 'metronome_data_v2'; 
     
     // --- Initial Data ---
     const DEFAULT_PRESET = {
         id: 'default',
         name: 'Default (4/4)',
         bpm: 120,
-        beatsPerCycle: 4,   // Total Steps
-        subdivision: 1,     // Clicks per beat
+        beatsPerCycle: 4,
+        subdivision: 1,
         grid: { 'high-0': true, 'low-0': true, 'mid-2': true }
     };
 
@@ -22,11 +22,8 @@ const MetronomeUI = () => {
         if (saved) {
             try {
                 const parsed = JSON.parse(saved);
-                // Migrate v1 data (which didn't have subdivision)
                 const safePresets = (parsed.presets || [DEFAULT_PRESET]).map(p => ({
-                    ...DEFAULT_PRESET,
-                    ...p,
-                    subdivision: p.subdivision || 1 
+                    ...DEFAULT_PRESET, ...p, subdivision: p.subdivision || 1 
                 }));
                 return safePresets;
             } catch (e) { return [DEFAULT_PRESET]; }
@@ -50,7 +47,7 @@ const MetronomeUI = () => {
     // Core State
     const [bpm, setBpm] = useState(currentPreset.bpm);
     const [beatsPerCycle, setBeatsPerCycle] = useState(currentPreset.beatsPerCycle);
-    const [subdivision, setSubdivision] = useState(currentPreset.subdivision || 1); // New State
+    const [subdivision, setSubdivision] = useState(currentPreset.subdivision || 1);
     const [grid, setGrid] = useState(currentPreset.grid);
     
     // UI State
@@ -63,11 +60,12 @@ const MetronomeUI = () => {
     const bpmRef = useRef(bpm);
     const gridRef = useRef(grid);
     const beatsRef = useRef(beatsPerCycle);
-    const subRef = useRef(subdivision); // New Ref
+    const subRef = useRef(subdivision);
     const isPlayingRef = useRef(isPlaying); 
 
     const lastMousePos = useRef({ x: 0, y: 0 });
     const audioCtxRef = useRef(null);
+    const noiseBufferRef = useRef(null); // Stores the noise sample
     const nextNoteTimeRef = useRef(0);
     const timerIDRef = useRef(null);
     const stepRef = useRef(0);
@@ -86,43 +84,117 @@ const MetronomeUI = () => {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
     }, [presets, selectedPresetId]);
 
-    // --- Audio Engine ---
+    // --- Audio Engine (Enhanced) ---
     const initAudio = () => {
         if (!audioCtxRef.current) {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             audioCtxRef.current = new AudioContext();
         }
+        
+        // Generate White Noise Buffer (Only once)
+        if (!noiseBufferRef.current) {
+            const bufferSize = audioCtxRef.current.sampleRate * 2; // 2 seconds of noise
+            const buffer = audioCtxRef.current.createBuffer(1, bufferSize, audioCtxRef.current.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                data[i] = Math.random() * 2 - 1;
+            }
+            noiseBufferRef.current = buffer;
+        }
+
         if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
     };
 
     const playSound = (type, time) => {
         const ctx = audioCtxRef.current;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
+        const t = time;
 
         if (type === 'kick') {
-            osc.frequency.setValueAtTime(150, time);
-            osc.frequency.exponentialRampToValueAtTime(0.01, time + 0.5);
-            gain.gain.setValueAtTime(1, time);
-            gain.gain.exponentialRampToValueAtTime(0.01, time + 0.5);
-            osc.start(time);
-            osc.stop(time + 0.5);
+            // 1. Oscillator for the body (Punch)
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            // Pitch Drop: Start high (150Hz), drop to low (0.01Hz) quickly
+            // This creates the "Thud" sound
+            osc.frequency.setValueAtTime(150, t);
+            osc.frequency.exponentialRampToValueAtTime(0.01, t + 0.5);
+            
+            // Amplitude Envelope
+            gain.gain.setValueAtTime(1, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+
+            osc.start(t);
+            osc.stop(t + 0.5);
+
+            // 2. Click (Transient) for definition
+            const clickOsc = ctx.createOscillator();
+            const clickGain = ctx.createGain();
+            clickOsc.connect(clickGain);
+            clickGain.connect(ctx.destination);
+            clickOsc.type = 'square';
+            clickOsc.frequency.setValueAtTime(50, t);
+            clickGain.gain.setValueAtTime(0.3, t);
+            clickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.02); // Very short
+            clickOsc.start(t);
+            clickOsc.stop(t + 0.02);
+            
         } else if (type === 'snare') {
+            // 1. Tone (Shell resonance)
+            const osc = ctx.createOscillator();
+            const oscGain = ctx.createGain();
             osc.type = 'triangle';
-            osc.frequency.setValueAtTime(100, time);
-            gain.gain.setValueAtTime(0.7, time);
-            gain.gain.exponentialRampToValueAtTime(0.01, time + 0.2);
-            osc.start(time);
-            osc.stop(time + 0.2);
+            osc.connect(oscGain);
+            oscGain.connect(ctx.destination);
+
+            osc.frequency.setValueAtTime(250, t);
+            oscGain.gain.setValueAtTime(0.4, t);
+            oscGain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
+            osc.start(t);
+            osc.stop(t + 0.1);
+
+            // 2. Noise (The Snares)
+            const noise = ctx.createBufferSource();
+            noise.buffer = noiseBufferRef.current;
+            const noiseFilter = ctx.createBiquadFilter();
+            const noiseGain = ctx.createGain();
+
+            noiseFilter.type = 'highpass';
+            noiseFilter.frequency.value = 1000;
+            
+            noise.connect(noiseFilter);
+            noiseFilter.connect(noiseGain);
+            noiseGain.connect(ctx.destination);
+
+            noiseGain.gain.setValueAtTime(0.5, t);
+            noiseGain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+            
+            noise.start(t);
+            noise.stop(t + 0.2);
+
         } else if (type === 'hat') {
-            osc.type = 'square';
-            osc.frequency.setValueAtTime(800, time);
-            gain.gain.setValueAtTime(0.3, time);
-            gain.gain.exponentialRampToValueAtTime(0.01, time + 0.05);
-            osc.start(time);
-            osc.stop(time + 0.05);
+            // High Pass Filtered Noise (Metallic click)
+            const noise = ctx.createBufferSource();
+            noise.buffer = noiseBufferRef.current;
+            const filter = ctx.createBiquadFilter();
+            const gain = ctx.createGain();
+
+            // Filter out everything below 5000Hz (remove rumble/mids)
+            filter.type = 'highpass';
+            filter.frequency.value = 5000;
+
+            noise.connect(filter);
+            filter.connect(gain);
+            gain.connect(ctx.destination);
+
+            // Very short, sharp envelope
+            gain.gain.setValueAtTime(0.3, t);
+            gain.gain.exponentialRampToValueAtTime(0.01, t + 0.05);
+
+            noise.start(t);
+            noise.stop(t + 0.05);
         }
     };
 
@@ -140,9 +212,8 @@ const MetronomeUI = () => {
     };
 
     const scheduler = () => {
-        // Calculate step duration based on BPM AND Subdivision
         const secondsPerBeat = 60.0 / bpmRef.current; 
-        const secondsPerStep = secondsPerBeat / subRef.current; // <--- CHANGED HERE
+        const secondsPerStep = secondsPerBeat / subRef.current; 
 
         const lookahead = 25.0; 
         const scheduleAheadTime = 0.1; 
@@ -198,7 +269,7 @@ const MetronomeUI = () => {
             setSelectedPresetId(id);
             setBpm(preset.bpm);
             setBeatsPerCycle(preset.beatsPerCycle);
-            setSubdivision(preset.subdivision || 1); // Load Subdivision
+            setSubdivision(preset.subdivision || 1); 
             setGrid(preset.grid);
             setIsPlaying(false); 
         }
@@ -213,7 +284,7 @@ const MetronomeUI = () => {
             name: name,
             bpm: bpm,
             beatsPerCycle: beatsPerCycle,
-            subdivision: subdivision, // Save Subdivision
+            subdivision: subdivision, 
             grid: { ...grid }
         };
 
@@ -256,10 +327,7 @@ const MetronomeUI = () => {
             try {
                 const loaded = JSON.parse(event.target.result);
                 if (Array.isArray(loaded) && loaded.length > 0) {
-                    // Normalize loaded data
-                    const normalized = loaded.map(p => ({
-                        ...DEFAULT_PRESET, ...p
-                    }));
+                    const normalized = loaded.map(p => ({ ...DEFAULT_PRESET, ...p }));
                     setPresets(normalized);
                     const first = normalized[0];
                     setSelectedPresetId(first.id);
@@ -274,7 +342,7 @@ const MetronomeUI = () => {
         reader.readAsText(file);
     };
 
-    // --- Interaction (Dial) ---
+    // --- Interaction ---
     const updateBpmFromDelta = (clientX, clientY) => {
         const deltaX = clientX - lastMousePos.current.x;
         const deltaY = clientY - lastMousePos.current.y;
@@ -314,6 +382,7 @@ const MetronomeUI = () => {
         else if (e.target.value === '') setBpm('');
     };
     const handleBpmBlur = () => { if (bpm === '' || isNaN(bpm) || bpm < MIN_BPM) setBpm(MIN_BPM); };
+    const handleKeyDown = (e) => { if (e.key === 'Enter') e.target.blur(); };
     const getRotation = () => {
         const b = (bpm === '' || isNaN(bpm)) ? MIN_BPM : bpm;
         return -150 + ((Math.min(Math.max(b, MIN_BPM), MAX_BPM) - MIN_BPM) / (MAX_BPM - MIN_BPM) * 300);
@@ -342,14 +411,11 @@ const MetronomeUI = () => {
         tapBtn: { width: '60px', height: '60px', borderRadius: '50%', background: '#2C2C2C', border: '1px solid #444', color: '#ccc', cursor: 'pointer', fontWeight: 'bold', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', fontSize: '0.8rem' },
         tapCount: { fontSize: '0.6rem', color: '#666', marginTop: '2px' },
         playBtn: { width: '90px', height: '90px', borderRadius: '24px', background: isPlaying ? '#CF6679' : '#03DAC6', border: 'none', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer', boxShadow: isPlaying ? '0 0 25px rgba(207, 102, 121, 0.4)' : '0 0 25px rgba(3, 218, 198, 0.4)', transition: 'all 0.2s' },
-        
-        // Updated SpinBox Styles for Dual Control
         spinBoxContainer: { display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', background: '#1E1E1E', borderRadius: '12px', border: '1px solid #333', padding: '0 8px', height: '80px', gap: '5px' },
         spinCol: { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '30px' },
         spinBtn: { background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '0.8rem', padding: '5px', width: '100%', outline: 'none' },
         spinValue: { fontSize: '1.2rem', fontWeight: 'bold', color: '#E0E0E0' },
         spinSlash: { fontSize: '1.5rem', color: '#444', fontWeight: '300' },
-
         sequencerLabel: { width: '100%', maxWidth: '500px', textAlign: 'left', color: '#666', fontSize: '0.8rem', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 'bold' },
         sequencerContainer: { display: 'grid', gridTemplateColumns: `60px repeat(${beatsPerCycle}, 1fr)`, gap: '8px', maxWidth: '500px', width: '100%', background: '#181818', padding: '20px', borderRadius: '16px', border: '1px solid #222' },
         rowLabel: { display: 'flex', alignItems: 'center', color: '#888', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.5px' },
@@ -376,7 +442,7 @@ const MetronomeUI = () => {
                 <div style={styles.dialTrack}></div>
                 <div style={styles.knobRotator}><div style={styles.knobHandle}></div></div>
                 <div style={styles.centerDisplay}>
-                    <input type="number" value={bpm} onChange={handleBpmChange} onBlur={handleBpmBlur} style={styles.bpmInput} />
+                    <input type="number" value={bpm} onChange={handleBpmChange} onBlur={handleBpmBlur} onKeyDown={handleKeyDown} style={styles.bpmInput} />
                     <span style={styles.bpmLabel}>BPM</span>
                 </div>
             </div>
@@ -391,18 +457,13 @@ const MetronomeUI = () => {
                     {isPlaying ? <div style={{width: 20, height: 20, background: '#121212'}}></div> : <div style={{width: 0, height: 0, borderTop: '12px solid transparent', borderBottom: '12px solid transparent', borderLeft: '20px solid #121212'}}></div>}
                 </button>
 
-                {/* NEW Dual Spinbox Control */}
                 <div style={styles.spinBoxContainer}>
-                    {/* Left: Beats per Cycle */}
                     <div style={styles.spinCol}>
                         <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.min(prev + 1, 16))}>▲</button>
                         <div style={styles.spinValue}>{beatsPerCycle}</div>
                         <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.max(prev - 1, 1))}>▼</button>
                     </div>
-
                     <div style={styles.spinSlash}>/</div>
-
-                    {/* Right: Subdivision (Clicks per Beat) */}
                     <div style={styles.spinCol}>
                         <button style={styles.spinBtn} onClick={() => setSubdivision(prev => Math.min(prev + 1, 8))}>▲</button>
                         <div style={styles.spinValue}>{subdivision}</div>
