@@ -1,0 +1,392 @@
+const { useState, useEffect, useRef } = React;
+
+const MetronomeUI = () => {
+    // --- Configuration ---
+    const MIN_BPM = 30;
+    const MAX_BPM = 250;
+    
+    // --- State ---
+    const [bpm, setBpm] = useState(120);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [beatsPerCycle, setBeatsPerCycle] = useState(4);
+    const [isDragging, setIsDragging] = useState(false);
+    
+    // Grid State
+    const [grid, setGrid] = useState({ 
+        'high-0': true, 
+        'low-0': true, 
+        'mid-2': true 
+    });
+
+    // Refs for Drag Logic
+    const lastMousePos = useRef({ x: 0, y: 0 });
+
+    // --- Logic: Relative Drag ---
+    const updateBpmFromDelta = (clientX, clientY) => {
+        const deltaX = clientX - lastMousePos.current.x;
+        const deltaY = clientY - lastMousePos.current.y;
+        const sensitivity = 0.5; 
+        const change = (deltaX - deltaY) * sensitivity;
+
+        setBpm(prev => {
+            const currentVal = (prev === '' || isNaN(prev)) ? MIN_BPM : prev;
+            let newVal = currentVal + change;
+            if (newVal < MIN_BPM) newVal = MIN_BPM;
+            if (newVal > MAX_BPM) newVal = MAX_BPM;
+            return Math.round(newVal);
+        });
+
+        lastMousePos.current = { x: clientX, y: clientY };
+    };
+
+    // --- Event Handlers ---
+    const handleMouseDown = (e) => {
+        setIsDragging(true);
+        lastMousePos.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const handleTouchStart = (e) => {
+        setIsDragging(true);
+        lastMousePos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    };
+
+    useEffect(() => {
+        const handleMouseMove = (e) => {
+            if (isDragging) updateBpmFromDelta(e.clientX, e.clientY);
+        };
+        const handleMouseUp = () => {
+            setIsDragging(false);
+        };
+        const handleTouchMove = (e) => {
+            if (isDragging) {
+                e.preventDefault(); 
+                updateBpmFromDelta(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        };
+
+        if (isDragging) {
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+            window.addEventListener('touchmove', handleTouchMove, { passive: false });
+            window.addEventListener('touchend', handleMouseUp);
+        }
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('touchmove', handleTouchMove);
+            window.removeEventListener('touchend', handleMouseUp);
+        };
+    }, [isDragging]);
+
+
+    // --- Helpers ---
+    const toggleGridParams = (row, col) => {
+        const key = `${row}-${col}`;
+        setGrid(prev => ({ ...prev, [key]: !prev[key] }));
+    };
+
+    const handleBpmChange = (e) => {
+        const valStr = e.target.value;
+        if (valStr === '') { setBpm(''); return; }
+        let val = parseInt(valStr);
+        if (isNaN(val)) return;
+        if (val > MAX_BPM) val = MAX_BPM;
+        setBpm(val);
+    };
+
+    const handleBpmBlur = () => {
+        let val = bpm;
+        if (val === '' || isNaN(val) || val < MIN_BPM) setBpm(MIN_BPM);
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter') e.target.blur();
+    };
+
+    const getRotation = () => {
+        const currentBpm = (bpm === '' || isNaN(bpm)) ? MIN_BPM : bpm;
+        const safeBpm = Math.min(Math.max(currentBpm, MIN_BPM), MAX_BPM);
+        const percent = (safeBpm - MIN_BPM) / (MAX_BPM - MIN_BPM);
+        return -150 + (percent * 300); 
+    };
+
+    // --- Icons (Inline SVGs) ---
+    const IconStore = () => (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+    );
+
+    const IconTrash = () => (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+    );
+
+    const IconExport = () => (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {/* Floppy Disk */}
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+            {/* Arrow pointing Left (into disk) */}
+            <line x1="23" y1="12" x2="17" y2="12" stroke="#03DAC6" strokeWidth="3"></line>
+            <polyline points="19 10 17 12 19 14" stroke="#03DAC6" strokeWidth="3"></polyline>
+        </svg>
+    );
+
+    const IconImport = () => (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+             {/* Floppy Disk */}
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+            {/* Arrow pointing Right (out of disk) */}
+            <line x1="17" y1="12" x2="23" y2="12" stroke="#BB86FC" strokeWidth="3"></line>
+            <polyline points="21 10 23 12 21 14" stroke="#BB86FC" strokeWidth="3"></polyline>
+        </svg>
+    );
+
+    // --- Styles ---
+    const styles = {
+        container: {
+            minHeight: '100vh',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            padding: '20px',
+            boxSizing: 'border-box'
+        },
+        header: {
+            width: '100%',
+            maxWidth: '500px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '30px',
+            borderBottom: '1px solid #333',
+            paddingBottom: '15px'
+        },
+        // Updated Button Style for Icons
+        buttonGhost: {
+            background: 'transparent',
+            border: '1px solid #444',
+            color: '#aaa',
+            width: '36px',
+            height: '36px',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            marginLeft: '8px',
+            display: 'inline-flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            transition: 'background 0.2s, border-color 0.2s',
+        },
+        select: {
+            background: '#1E1E1E',
+            color: '#fff',
+            border: '1px solid #333',
+            padding: '8px',
+            borderRadius: '6px',
+            minWidth: '140px',
+            outline: 'none',
+        },
+        dialWrapper: {
+            position: 'relative',
+            width: '280px',
+            height: '280px',
+            marginBottom: '30px',
+            cursor: isDragging ? 'grabbing' : 'grab',
+            touchAction: 'none', 
+        },
+        dialTrack: {
+            width: '100%',
+            height: '100%',
+            borderRadius: '50%',
+            background: `conic-gradient(from 180deg at 50% 50%, 
+                #121212 0deg, 
+                #121212 30deg, 
+                #333 30deg, 
+                #333 330deg, 
+                #121212 330deg)`,
+            position: 'absolute',
+            boxShadow: 'inset 0 0 20px #000, 0 10px 30px rgba(0,0,0,0.5)',
+        },
+        knobRotator: {
+            position: 'absolute',
+            top: 0, left: 0,
+            width: '100%', height: '100%',
+            transform: `rotate(${getRotation()}deg)`,
+            pointerEvents: 'none', 
+            transition: isDragging ? 'none' : 'transform 0.1s cubic-bezier(0.1, 0.7, 1.0, 0.1)',
+        },
+        knobHandle: {
+            position: 'absolute',
+            top: '20px', 
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: '24px',
+            height: '24px',
+            borderRadius: '50%',
+            background: isDragging ? '#fff' : '#BB86FC',
+            boxShadow: isDragging ? '0 0 20px #fff' : '0 0 15px #BB86FC',
+            zIndex: 10,
+            transition: 'background 0.2s, box-shadow 0.2s'
+        },
+        centerDisplay: {
+            position: 'absolute',
+            top: '50%', left: '50%',
+            transform: 'translate(-50%, -50%)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            zIndex: 20,
+        },
+        bpmInput: {
+            background: 'transparent',
+            border: 'none',
+            color: '#fff',
+            fontSize: '4rem',
+            fontWeight: '700',
+            textAlign: 'center',
+            width: '180px',
+            outline: 'none',
+            fontFamily: 'monospace',
+            pointerEvents: 'auto', 
+            textShadow: '0 4px 10px rgba(0,0,0,0.5)',
+            userSelect: 'none',
+        },
+        bpmLabel: {
+            color: '#BB86FC',
+            fontSize: '1rem',
+            letterSpacing: '3px',
+            fontWeight: 'bold',
+            marginTop: '-10px',
+            opacity: 0.8
+        },
+        controlsRow: { display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '40px' },
+        tapBtn: { width: '60px', height: '60px', borderRadius: '50%', background: '#2C2C2C', border: '1px solid #444', color: '#ccc', cursor: 'pointer', fontWeight: 'bold' },
+        playBtn: { 
+            width: '90px', height: '90px', borderRadius: '24px', 
+            background: isPlaying ? '#CF6679' : '#03DAC6', 
+            border: 'none', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer',
+            boxShadow: isPlaying ? '0 0 25px rgba(207, 102, 121, 0.4)' : '0 0 25px rgba(3, 218, 198, 0.4)',
+            transition: 'all 0.2s'
+        },
+        spinBoxContainer: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#1E1E1E', borderRadius: '12px', border: '1px solid #333', width: '60px', height: '80px' },
+        spinBtn: { background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '0.8rem', padding: '5px', width: '100%' },
+        spinValue: { fontSize: '1.4rem', fontWeight: 'bold', color: '#E0E0E0' },
+        sequencerLabel: { width: '100%', maxWidth: '500px', textAlign: 'left', color: '#666', fontSize: '0.8rem', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 'bold' },
+        sequencerContainer: { display: 'grid', gridTemplateColumns: `60px repeat(${beatsPerCycle}, 1fr)`, gap: '8px', maxWidth: '500px', width: '100%', background: '#181818', padding: '20px', borderRadius: '16px', border: '1px solid #222' },
+        rowLabel: { display: 'flex', alignItems: 'center', color: '#888', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.5px' },
+        beatBox: (active, color) => ({
+            height: '45px', background: active ? color : '#252525', borderRadius: '4px', cursor: 'pointer',
+            border: active ? `1px solid ${color}` : '1px solid #333',
+            boxShadow: active ? `0 0 10px ${color}66` : 'none',
+            transition: 'all 0.1s'
+        }),
+    };
+
+    return (
+        <div style={styles.container}>
+            
+            {/* Header */}
+            <header style={styles.header}>
+                <select style={styles.select}>
+                    <option>Default (4/4)</option>
+                    <option>Heavy Rock</option>
+                    <option>Jazz Swing</option>
+                </select>
+                <div style={{display: 'flex'}}>
+                    {/* Store (Add) */}
+                    <button style={styles.buttonGhost} title="Store Preset">
+                        <IconStore />
+                    </button>
+                    {/* Delete (Trash) */}
+                    <button style={styles.buttonGhost} title="Delete Preset">
+                        <IconTrash />
+                    </button>
+                    {/* Export (Arrow Left to Disk) */}
+                    <button style={styles.buttonGhost} title="Export to File">
+                        <IconExport />
+                    </button>
+                    {/* Import (Arrow Right out of Disk) */}
+                    <button style={styles.buttonGhost} title="Import from File">
+                        <IconImport />
+                    </button>
+                </div>
+            </header>
+
+            {/* Interactive Dial */}
+            <div 
+                style={styles.dialWrapper} 
+                onMouseDown={handleMouseDown}
+                onTouchStart={handleTouchStart}
+            >
+                <div style={styles.dialTrack}></div>
+                
+                {/* Knob Rotator */}
+                <div style={styles.knobRotator}>
+                    <div style={styles.knobHandle}></div>
+                </div>
+
+                {/* Center Text */}
+                <div style={styles.centerDisplay}>
+                    <input 
+                        type="number" 
+                        value={bpm} 
+                        onChange={handleBpmChange}
+                        onBlur={handleBpmBlur}
+                        onKeyDown={handleKeyDown}
+                        style={styles.bpmInput}
+                    />
+                    <span style={styles.bpmLabel}>BPM</span>
+                </div>
+            </div>
+
+            {/* Controls */}
+            <div style={styles.controlsRow}>
+                <button style={styles.tapBtn}>TAP</button>
+                
+                <button style={styles.playBtn} onClick={() => setIsPlaying(!isPlaying)}>
+                    {isPlaying ? (
+                        <div style={{width: 20, height: 20, background: '#121212'}}></div>
+                    ) : (
+                        <div style={{width: 0, height: 0, borderTop: '12px solid transparent', borderBottom: '12px solid transparent', borderLeft: '20px solid #121212'}}></div>
+                    )}
+                </button>
+
+                <div style={styles.spinBoxContainer}>
+                    <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.min(prev + 1, 16))}>▲</button>
+                    <div style={styles.spinValue}>{beatsPerCycle}</div>
+                    <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.max(prev - 1, 1))}>▼</button>
+                </div>
+            </div>
+
+            {/* Sequencer Grid */}
+            <div style={styles.sequencerLabel}>Rhythm Pattern</div>
+            <div style={styles.sequencerContainer}>
+                <div style={styles.rowLabel}>HI-HAT</div>
+                {[...Array(beatsPerCycle)].map((_, i) => (
+                    <div key={`high-${i}`} style={styles.beatBox(grid[`high-${i}`], '#FFFFFF')} onClick={() => toggleGridParams('high', i)}/>
+                ))}
+
+                <div style={styles.rowLabel}>SNARE</div>
+                {[...Array(beatsPerCycle)].map((_, i) => (
+                    <div key={`mid-${i}`} style={styles.beatBox(grid[`mid-${i}`], '#03DAC6')} onClick={() => toggleGridParams('mid', i)}/>
+                ))}
+
+                <div style={styles.rowLabel}>KICK</div>
+                {[...Array(beatsPerCycle)].map((_, i) => (
+                    <div key={`low-${i}`} style={styles.beatBox(grid[`low-${i}`], '#BB86FC')} onClick={() => toggleGridParams('low', i)}/>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<MetronomeUI />);
