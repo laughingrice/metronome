@@ -4,14 +4,15 @@ const MetronomeUI = () => {
     // --- Configuration ---
     const MIN_BPM = 30;
     const MAX_BPM = 250;
-    const STORAGE_KEY = 'metronome_data_v1';
+    const STORAGE_KEY = 'metronome_data_v2'; // Bumped version to v2
     
     // --- Initial Data ---
     const DEFAULT_PRESET = {
         id: 'default',
         name: 'Default (4/4)',
         bpm: 120,
-        beatsPerCycle: 4,
+        beatsPerCycle: 4,   // Total Steps
+        subdivision: 1,     // Clicks per beat
         grid: { 'high-0': true, 'low-0': true, 'mid-2': true }
     };
 
@@ -21,7 +22,13 @@ const MetronomeUI = () => {
         if (saved) {
             try {
                 const parsed = JSON.parse(saved);
-                return parsed.presets || [DEFAULT_PRESET];
+                // Migrate v1 data (which didn't have subdivision)
+                const safePresets = (parsed.presets || [DEFAULT_PRESET]).map(p => ({
+                    ...DEFAULT_PRESET,
+                    ...p,
+                    subdivision: p.subdivision || 1 
+                }));
+                return safePresets;
             } catch (e) { return [DEFAULT_PRESET]; }
         }
         return [DEFAULT_PRESET];
@@ -40,21 +47,23 @@ const MetronomeUI = () => {
 
     const currentPreset = presets.find(p => p.id === selectedPresetId) || presets[0];
 
+    // Core State
     const [bpm, setBpm] = useState(currentPreset.bpm);
     const [beatsPerCycle, setBeatsPerCycle] = useState(currentPreset.beatsPerCycle);
+    const [subdivision, setSubdivision] = useState(currentPreset.subdivision || 1); // New State
     const [grid, setGrid] = useState(currentPreset.grid);
     
+    // UI State
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentStep, setCurrentStep] = useState(-1); 
     const [isDragging, setIsDragging] = useState(false);
-
-    // --- TAP State ---
-    const [tapTimes, setTapTimes] = useState([]); // Stores timestamps of taps
+    const [tapTimes, setTapTimes] = useState([]); 
 
     // --- Refs ---
     const bpmRef = useRef(bpm);
     const gridRef = useRef(grid);
     const beatsRef = useRef(beatsPerCycle);
+    const subRef = useRef(subdivision); // New Ref
     const isPlayingRef = useRef(isPlaying); 
 
     const lastMousePos = useRef({ x: 0, y: 0 });
@@ -68,6 +77,7 @@ const MetronomeUI = () => {
     useEffect(() => { bpmRef.current = bpm; }, [bpm]);
     useEffect(() => { gridRef.current = grid; }, [grid]);
     useEffect(() => { beatsRef.current = beatsPerCycle; }, [beatsPerCycle]);
+    useEffect(() => { subRef.current = subdivision; }, [subdivision]);
     useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
     // --- Persistence ---
@@ -130,14 +140,17 @@ const MetronomeUI = () => {
     };
 
     const scheduler = () => {
+        // Calculate step duration based on BPM AND Subdivision
         const secondsPerBeat = 60.0 / bpmRef.current; 
+        const secondsPerStep = secondsPerBeat / subRef.current; // <--- CHANGED HERE
+
         const lookahead = 25.0; 
         const scheduleAheadTime = 0.1; 
 
         if (isPlayingRef.current) {
             while (nextNoteTimeRef.current < audioCtxRef.current.currentTime + scheduleAheadTime) {
                 scheduleNote(stepRef.current, nextNoteTimeRef.current);
-                nextNoteTimeRef.current += secondsPerBeat;
+                nextNoteTimeRef.current += secondsPerStep;
                 stepRef.current = (stepRef.current + 1) % beatsRef.current;
             }
             timerIDRef.current = setTimeout(scheduler, lookahead);
@@ -162,29 +175,17 @@ const MetronomeUI = () => {
     const handleTap = () => {
         const now = Date.now();
         setTapTimes(prev => {
-            // 1. Check for timeout (3 seconds)
-            if (prev.length > 0 && now - prev[prev.length - 1] > 3000) {
-                return [now]; // Start fresh
-            }
-
-            // 2. Add new tap and keep max 5
+            if (prev.length > 0 && now - prev[prev.length - 1] > 3000) return [now];
             const newTaps = [...prev, now];
-            if (newTaps.length > 5) newTaps.shift(); // Remove oldest
-
-            // 3. Calculate BPM if we have at least 5 taps
+            if (newTaps.length > 5) newTaps.shift();
             if (newTaps.length >= 5) {
                 let intervals = [];
-                for (let i = 0; i < newTaps.length - 1; i++) {
-                    intervals.push(newTaps[i + 1] - newTaps[i]);
-                }
+                for (let i = 0; i < newTaps.length - 1; i++) intervals.push(newTaps[i + 1] - newTaps[i]);
                 const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
                 const newBpm = Math.round(60000 / avgInterval);
-
-                // Clamp and Set
                 const safeBpm = Math.min(Math.max(newBpm, MIN_BPM), MAX_BPM);
                 setBpm(safeBpm);
             }
-
             return newTaps;
         });
     };
@@ -197,6 +198,7 @@ const MetronomeUI = () => {
             setSelectedPresetId(id);
             setBpm(preset.bpm);
             setBeatsPerCycle(preset.beatsPerCycle);
+            setSubdivision(preset.subdivision || 1); // Load Subdivision
             setGrid(preset.grid);
             setIsPlaying(false); 
         }
@@ -211,6 +213,7 @@ const MetronomeUI = () => {
             name: name,
             bpm: bpm,
             beatsPerCycle: beatsPerCycle,
+            subdivision: subdivision, // Save Subdivision
             grid: { ...grid }
         };
 
@@ -220,10 +223,7 @@ const MetronomeUI = () => {
     };
 
     const handleDeletePreset = () => {
-        if (presets.length <= 1) {
-            alert("Cannot delete the last preset.");
-            return;
-        }
+        if (presets.length <= 1) { alert("Cannot delete the last preset."); return; }
         if (confirm("Delete this preset?")) {
             const newPresets = presets.filter(p => p.id !== selectedPresetId);
             setPresets(newPresets);
@@ -231,18 +231,19 @@ const MetronomeUI = () => {
             setSelectedPresetId(next.id);
             setBpm(next.bpm);
             setBeatsPerCycle(next.beatsPerCycle);
+            setSubdivision(next.subdivision || 1);
             setGrid(next.grid);
         }
     };
 
     const handleExport = () => {
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(presets));
-        const downloadAnchorNode = document.createElement('a');
-        downloadAnchorNode.setAttribute("href", dataStr);
-        downloadAnchorNode.setAttribute("download", "metronome_presets.json");
-        document.body.appendChild(downloadAnchorNode);
-        downloadAnchorNode.click();
-        downloadAnchorNode.remove();
+        const anchor = document.createElement('a');
+        anchor.setAttribute("href", dataStr);
+        anchor.setAttribute("download", "metronome_presets.json");
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
     };
 
     const triggerImport = () => { fileInputRef.current.click(); };
@@ -253,75 +254,52 @@ const MetronomeUI = () => {
         const reader = new FileReader();
         reader.onload = (event) => {
             try {
-                const loadedPresets = JSON.parse(event.target.result);
-                if (Array.isArray(loadedPresets) && loadedPresets.length > 0) {
-                    setPresets(loadedPresets);
-                    const first = loadedPresets[0];
+                const loaded = JSON.parse(event.target.result);
+                if (Array.isArray(loaded) && loaded.length > 0) {
+                    // Normalize loaded data
+                    const normalized = loaded.map(p => ({
+                        ...DEFAULT_PRESET, ...p
+                    }));
+                    setPresets(normalized);
+                    const first = normalized[0];
                     setSelectedPresetId(first.id);
                     setBpm(first.bpm);
                     setBeatsPerCycle(first.beatsPerCycle);
+                    setSubdivision(first.subdivision || 1);
                     setGrid(first.grid);
                     setIsPlaying(false);
-                } else {
-                    alert("Invalid JSON format");
-                }
+                } else { alert("Invalid JSON"); }
             } catch (err) { alert("Error reading file"); }
         };
         reader.readAsText(file);
     };
 
-    // --- Interaction Logic (Dial) ---
+    // --- Interaction (Dial) ---
     const updateBpmFromDelta = (clientX, clientY) => {
         const deltaX = clientX - lastMousePos.current.x;
         const deltaY = clientY - lastMousePos.current.y;
-        const sensitivity = 0.5; 
-        const change = (deltaX - deltaY) * sensitivity;
-
         setBpm(prev => {
-            const currentVal = (prev === '' || isNaN(prev)) ? MIN_BPM : prev;
-            let newVal = currentVal + change;
-            if (newVal < MIN_BPM) newVal = MIN_BPM;
-            if (newVal > MAX_BPM) newVal = MAX_BPM;
-            return Math.round(newVal);
+            const c = (prev === '' || isNaN(prev)) ? MIN_BPM : prev;
+            let n = c + (deltaX - deltaY) * 0.5;
+            return Math.round(Math.min(Math.max(n, MIN_BPM), MAX_BPM));
         });
-
         lastMousePos.current = { x: clientX, y: clientY };
     };
 
-    const handleMouseDown = (e) => {
-        setIsDragging(true);
-        lastMousePos.current = { x: e.clientX, y: e.clientY };
-    };
-
-    const handleTouchStart = (e) => {
-        setIsDragging(true);
-        lastMousePos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    };
+    const handleMouseDown = (e) => { setIsDragging(true); lastMousePos.current = { x: e.clientX, y: e.clientY }; };
+    const handleTouchStart = (e) => { setIsDragging(true); lastMousePos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; };
 
     useEffect(() => {
-        const handleMouseMove = (e) => {
-            if (isDragging) updateBpmFromDelta(e.clientX, e.clientY);
-        };
-        const handleMouseUp = () => { setIsDragging(false); };
-        const handleTouchMove = (e) => {
-            if (isDragging) {
-                e.preventDefault(); 
-                updateBpmFromDelta(e.touches[0].clientX, e.touches[0].clientY);
-            }
-        };
-
+        const mv = (e) => { if (isDragging) updateBpmFromDelta(e.clientX, e.clientY); };
+        const up = () => setIsDragging(false);
+        const tm = (e) => { if (isDragging) { e.preventDefault(); updateBpmFromDelta(e.touches[0].clientX, e.touches[0].clientY); }};
         if (isDragging) {
-            window.addEventListener('mousemove', handleMouseMove);
-            window.addEventListener('mouseup', handleMouseUp);
-            window.addEventListener('touchmove', handleTouchMove, { passive: false });
-            window.addEventListener('touchend', handleMouseUp);
+            window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up);
+            window.addEventListener('touchmove', tm, { passive: false }); window.addEventListener('touchend', up);
         }
-
         return () => {
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-            window.removeEventListener('touchmove', handleTouchMove);
-            window.removeEventListener('touchend', handleMouseUp);
+            window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up);
+            window.removeEventListener('touchmove', tm); window.removeEventListener('touchend', up);
         };
     }, [isDragging]);
 
@@ -331,28 +309,14 @@ const MetronomeUI = () => {
     };
 
     const handleBpmChange = (e) => {
-        const valStr = e.target.value;
-        if (valStr === '') { setBpm(''); return; }
-        let val = parseInt(valStr);
-        if (isNaN(val)) return;
-        if (val > MAX_BPM) val = MAX_BPM;
-        setBpm(val);
+        const v = parseInt(e.target.value);
+        if (!isNaN(v)) setBpm(Math.min(v, MAX_BPM));
+        else if (e.target.value === '') setBpm('');
     };
-
-    const handleBpmBlur = () => {
-        let val = bpm;
-        if (val === '' || isNaN(val) || val < MIN_BPM) setBpm(MIN_BPM);
-    };
-
-    const handleKeyDown = (e) => {
-        if (e.key === 'Enter') e.target.blur();
-    };
-
+    const handleBpmBlur = () => { if (bpm === '' || isNaN(bpm) || bpm < MIN_BPM) setBpm(MIN_BPM); };
     const getRotation = () => {
-        const currentBpm = (bpm === '' || isNaN(bpm)) ? MIN_BPM : bpm;
-        const safeBpm = Math.min(Math.max(currentBpm, MIN_BPM), MAX_BPM);
-        const percent = (safeBpm - MIN_BPM) / (MAX_BPM - MIN_BPM);
-        return -150 + (percent * 300); 
+        const b = (bpm === '' || isNaN(bpm)) ? MIN_BPM : bpm;
+        return -150 + ((Math.min(Math.max(b, MIN_BPM), MAX_BPM) - MIN_BPM) / (MAX_BPM - MIN_BPM) * 300);
     };
 
     // --- Icons ---
@@ -378,9 +342,14 @@ const MetronomeUI = () => {
         tapBtn: { width: '60px', height: '60px', borderRadius: '50%', background: '#2C2C2C', border: '1px solid #444', color: '#ccc', cursor: 'pointer', fontWeight: 'bold', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', fontSize: '0.8rem' },
         tapCount: { fontSize: '0.6rem', color: '#666', marginTop: '2px' },
         playBtn: { width: '90px', height: '90px', borderRadius: '24px', background: isPlaying ? '#CF6679' : '#03DAC6', border: 'none', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer', boxShadow: isPlaying ? '0 0 25px rgba(207, 102, 121, 0.4)' : '0 0 25px rgba(3, 218, 198, 0.4)', transition: 'all 0.2s' },
-        spinBoxContainer: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#1E1E1E', borderRadius: '12px', border: '1px solid #333', width: '60px', height: '80px' },
-        spinBtn: { background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '0.8rem', padding: '5px', width: '100%' },
-        spinValue: { fontSize: '1.4rem', fontWeight: 'bold', color: '#E0E0E0' },
+        
+        // Updated SpinBox Styles for Dual Control
+        spinBoxContainer: { display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', background: '#1E1E1E', borderRadius: '12px', border: '1px solid #333', padding: '0 8px', height: '80px', gap: '5px' },
+        spinCol: { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '30px' },
+        spinBtn: { background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '0.8rem', padding: '5px', width: '100%', outline: 'none' },
+        spinValue: { fontSize: '1.2rem', fontWeight: 'bold', color: '#E0E0E0' },
+        spinSlash: { fontSize: '1.5rem', color: '#444', fontWeight: '300' },
+
         sequencerLabel: { width: '100%', maxWidth: '500px', textAlign: 'left', color: '#666', fontSize: '0.8rem', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 'bold' },
         sequencerContainer: { display: 'grid', gridTemplateColumns: `60px repeat(${beatsPerCycle}, 1fr)`, gap: '8px', maxWidth: '500px', width: '100%', background: '#181818', padding: '20px', borderRadius: '16px', border: '1px solid #222' },
         rowLabel: { display: 'flex', alignItems: 'center', color: '#888', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.5px' },
@@ -407,32 +376,42 @@ const MetronomeUI = () => {
                 <div style={styles.dialTrack}></div>
                 <div style={styles.knobRotator}><div style={styles.knobHandle}></div></div>
                 <div style={styles.centerDisplay}>
-                    <input type="number" value={bpm} onChange={handleBpmChange} onBlur={handleBpmBlur} onKeyDown={handleKeyDown} style={styles.bpmInput} />
+                    <input type="number" value={bpm} onChange={handleBpmChange} onBlur={handleBpmBlur} style={styles.bpmInput} />
                     <span style={styles.bpmLabel}>BPM</span>
                 </div>
             </div>
 
             <div style={styles.controlsRow}>
-                {/* TAP BUTTON Implementation */}
                 <button style={styles.tapBtn} onClick={handleTap}>
                     TAP
-                    <span style={styles.tapCount}>
-                        {tapTimes.length > 0 ? `${tapTimes.length}/5` : ''}
-                    </span>
+                    <span style={styles.tapCount}>{tapTimes.length > 0 ? `${tapTimes.length}/5` : ''}</span>
                 </button>
                 
                 <button style={styles.playBtn} onClick={() => setIsPlaying(!isPlaying)}>
                     {isPlaying ? <div style={{width: 20, height: 20, background: '#121212'}}></div> : <div style={{width: 0, height: 0, borderTop: '12px solid transparent', borderBottom: '12px solid transparent', borderLeft: '20px solid #121212'}}></div>}
                 </button>
 
+                {/* NEW Dual Spinbox Control */}
                 <div style={styles.spinBoxContainer}>
-                    <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.min(prev + 1, 16))}>▲</button>
-                    <div style={styles.spinValue}>{beatsPerCycle}</div>
-                    <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.max(prev - 1, 1))}>▼</button>
+                    {/* Left: Beats per Cycle */}
+                    <div style={styles.spinCol}>
+                        <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.min(prev + 1, 16))}>▲</button>
+                        <div style={styles.spinValue}>{beatsPerCycle}</div>
+                        <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.max(prev - 1, 1))}>▼</button>
+                    </div>
+
+                    <div style={styles.spinSlash}>/</div>
+
+                    {/* Right: Subdivision (Clicks per Beat) */}
+                    <div style={styles.spinCol}>
+                        <button style={styles.spinBtn} onClick={() => setSubdivision(prev => Math.min(prev + 1, 8))}>▲</button>
+                        <div style={styles.spinValue}>{subdivision}</div>
+                        <button style={styles.spinBtn} onClick={() => setSubdivision(prev => Math.max(prev - 1, 1))}>▼</button>
+                    </div>
                 </div>
             </div>
 
-            <div style={styles.sequencerLabel}>Rhythm Pattern</div>
+            <div style={styles.sequencerLabel}>Pattern ({beatsPerCycle} steps, 1/{subdivision} notes)</div>
             <div style={styles.sequencerContainer}>
                 <div style={styles.rowLabel}>HI-HAT</div>
                 {[...Array(beatsPerCycle)].map((_, i) => <div key={`high-${i}`} style={styles.beatBox(grid[`high-${i}`], '#FFFFFF', currentStep === i)} onClick={() => toggleGridParams('high', i)}/>)}
