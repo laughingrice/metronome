@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Icon Generator V2</title>
+    <style>
+        body {
+            background-color: #121212;
+            color: #eee;
+            font-family: monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        h1 { color: #BB86FC; }
+        canvas {
+            border: 2px solid #333;
+            background-image:
+                linear-gradient(45deg, #222 25%, transparent 25%),
+                linear-gradient(-45deg, #222 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, #222 75%),
+                linear-gradient(-45deg, transparent 75%, #222 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+            margin-bottom: 10px;
+        }
+        .container {
+            display: flex;
+            gap: 40px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 14px;
+            cursor: pointer;
+            background: #03DAC6;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            color: #000;
+            transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.8; }
+        #status { margin-top: 20px; color: #aaa; }
+    </style>
+</head>
+<body>
+
+    <h1>Icon Generator</h1>
+    
+    <div class="container">
+        <div class="box">
+            <span>192 x 192</span>
+            <canvas id="canvas192" width="192" height="192"></canvas>
+            <button onclick="downloadIcon(192)">Download icon-192.png</button>
+        </div>
+
+        <div class="box">
+            <span>512 x 512</span>
+            <canvas id="canvas512" width="512" height="512"></canvas>
+            <button onclick="downloadIcon(512)">Download icon-512.png</button>
+        </div>
+    </div>
+
+    <div id="status">Generating images...</div>
+
+    <script>
+        // The SVG Source Code (Inline string to prevent DOM issues)
+        const svgString = `
+        <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+            <rect x="0" y="0" width="512" height="512" fill="#121212"/>
+            
+            <g transform="translate(0, 40)">
+                <path d="M128,256 L128,360 C128,400 384,400 384,360 L384,256" fill="#2a1a35" stroke="#BB86FC" stroke-width="12"/>
+                <ellipse cx="256" cy="256" rx="130" ry="50" fill="#3a2a45" stroke="#BB86FC" stroke-width="12"/>
+            </g>
+
+            <g transform="translate(0, -20)">
+                <path d="M256,100 L160,340 L352,340 Z" fill="#03DAC6" stroke="#000" stroke-width="8" stroke-linejoin="round"/>
+                <path d="M256,130 L185,320 L327,320 Z" fill="#121212"/>
+                <line x1="256" y1="300" x2="280" y2="150" stroke="#FFF" stroke-width="6" stroke-linecap="round"/>
+                <rect x="270" y="170" width="16" height="24" fill="#BB86FC" rx="4" transform="rotate(10 278 182)"/>
+            </g>
+        </svg>`.trim();
+
+        function init() {
+            const status = document.getElementById('status');
+            const img = new Image();
+            
+            // Create a reliable data URI
+            const svg64 = encodeURIComponent(svgString);
+            img.src = "data:image/svg+xml;charset=utf-8," + svg64;
+
+            img.onload = () => {
+                // Draw 192
+                const ctx192 = document.getElementById('canvas192').getContext('2d');
+                ctx192.drawImage(img, 0, 0, 192, 192);
+
+                // Draw 512
+                const ctx512 = document.getElementById('canvas512').getContext('2d');
+                ctx512.drawImage(img, 0, 0, 512, 512);
+
+                status.innerText = "Ready to download.";
+                status.style.color = "#03DAC6";
+            };
+
+            img.onerror = (e) => {
+                status.innerText = "Error generating image.";
+                status.style.color = "red";
+                console.error(e);
+            };
+        }
+
+        function downloadIcon(size) {
+            const canvas = document.getElementById('canvas' + size);
+            const link = document.createElement('a');
+            link.download = `icon-${size}.png`;
+            // Using logic to fallback if browser security blocks direct dataURL
+            try {
+                link.href = canvas.toDataURL('image/png');
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } catch (err) {
+                alert("Browser security blocked the download. Please run this file via a local server (localhost).");
+            }
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
