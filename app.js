@@ -235,9 +235,13 @@ const MetronomeUI = () => {
             setCurrentStep(0);
             nextNoteTimeRef.current = audioCtxRef.current.currentTime;
             scheduler();
+            // Request wake lock so the screen stays on while playing (if supported)
+            requestWakeLock();
         } else {
             clearTimeout(timerIDRef.current);
             setCurrentStep(-1);
+            // Release wake lock when stopping playback
+            releaseWakeLock();
         }
         return () => clearTimeout(timerIDRef.current);
     }, [isPlaying]);
@@ -387,6 +391,53 @@ const MetronomeUI = () => {
         const b = (bpm === '' || isNaN(bpm)) ? MIN_BPM : bpm;
         return -150 + ((Math.min(Math.max(b, MIN_BPM), MAX_BPM) - MIN_BPM) / (MAX_BPM - MIN_BPM) * 300);
     };
+
+    // --- Wake Lock (keep screen on while playing) ---
+    const wakeLockRef = useRef(null);
+
+    const handleVisibilityChange = async () => {
+        if (document.visibilityState === 'visible' && isPlayingRef.current) {
+            // Re-request the wake lock if it was released while the page was hidden
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLockRef.current = await navigator.wakeLock.request('screen');
+                    wakeLockRef.current.addEventListener('release', () => { console.log('Wake Lock released'); });
+                }
+            } catch (e) {
+                console.warn('Wake Lock request failed on visibilitychange', e);
+            }
+        }
+    };
+
+    const requestWakeLock = async () => {
+        if (!('wakeLock' in navigator)) return;
+        try {
+            wakeLockRef.current = await navigator.wakeLock.request('screen');
+            wakeLockRef.current.addEventListener('release', () => { console.log('Wake Lock released'); });
+            document.addEventListener('visibilitychange', handleVisibilityChange);
+        } catch (err) {
+            console.warn('Wake Lock request failed', err);
+        }
+    };
+
+    const releaseWakeLock = async () => {
+        try {
+            if (wakeLockRef.current) {
+                await wakeLockRef.current.release();
+                wakeLockRef.current = null;
+            }
+        } catch (err) {
+            console.warn('Wake Lock release failed', err);
+        } finally {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        }
+    };
+
+    // Ensure we release when the page unloads or component unmounts
+    useEffect(() => {
+        window.addEventListener('beforeunload', releaseWakeLock);
+        return () => { releaseWakeLock(); window.removeEventListener('beforeunload', releaseWakeLock); };
+    }, []);
 
     // --- Icons ---
     const IconStore = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>;
