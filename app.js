@@ -394,14 +394,18 @@ const MetronomeUI = () => {
 
     // --- Wake Lock (keep screen on while playing) ---
     const wakeLockRef = useRef(null);
+    const noSleepRef = useRef(null); // fallback for iOS/Safari
 
     const handleVisibilityChange = async () => {
         if (document.visibilityState === 'visible' && isPlayingRef.current) {
-            // Re-request the wake lock if it was released while the page was hidden
+            // Re-request native wake lock if available, otherwise re-enable NoSleep
             try {
                 if ('wakeLock' in navigator) {
                     wakeLockRef.current = await navigator.wakeLock.request('screen');
                     wakeLockRef.current.addEventListener('release', () => { console.log('Wake Lock released'); });
+                } else if (window.NoSleep) {
+                    if (!noSleepRef.current) noSleepRef.current = new NoSleep();
+                    try { noSleepRef.current.enable(); } catch (e) { console.warn('NoSleep enable failed on visibilitychange', e); }
                 }
             } catch (e) {
                 console.warn('Wake Lock request failed on visibilitychange', e);
@@ -410,13 +414,24 @@ const MetronomeUI = () => {
     };
 
     const requestWakeLock = async () => {
-        if (!('wakeLock' in navigator)) return;
-        try {
-            wakeLockRef.current = await navigator.wakeLock.request('screen');
-            wakeLockRef.current.addEventListener('release', () => { console.log('Wake Lock released'); });
-            document.addEventListener('visibilitychange', handleVisibilityChange);
-        } catch (err) {
-            console.warn('Wake Lock request failed', err);
+        if ('wakeLock' in navigator) {
+            try {
+                wakeLockRef.current = await navigator.wakeLock.request('screen');
+                wakeLockRef.current.addEventListener('release', () => { console.log('Wake Lock released'); });
+                document.addEventListener('visibilitychange', handleVisibilityChange);
+            } catch (err) {
+                console.warn('Wake Lock request failed', err);
+            }
+        } else if (window.NoSleep) {
+            // Fallback for iOS Safari / older browsers: NoSleep keeps a tiny video playing to prevent sleep
+            try {
+                if (!noSleepRef.current) noSleepRef.current = new NoSleep();
+                noSleepRef.current.enable();
+            } catch (err) {
+                console.warn('NoSleep enable failed', err);
+            }
+        } else {
+            console.info('Wake Lock API and NoSleep are unavailable on this browser.');
         }
     };
 
@@ -425,6 +440,10 @@ const MetronomeUI = () => {
             if (wakeLockRef.current) {
                 await wakeLockRef.current.release();
                 wakeLockRef.current = null;
+            }
+            if (noSleepRef.current) {
+                try { noSleepRef.current.disable(); } catch (e) { /* ignore */ }
+                noSleepRef.current = null;
             }
         } catch (err) {
             console.warn('Wake Lock release failed', err);
