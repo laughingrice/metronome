@@ -13,7 +13,7 @@ const MetronomeUI = () => {
         bpm: 120,
         beatsPerCycle: 4,
         subdivision: 1,
-        grid: { 'high-0': true, 'low-0': true, 'mid-2': true }
+        grid: { 'high-0': true, 'high-1': true, 'high-2': true, 'high-3': true, 'low-0': true, 'mid-2': true }
     };
 
     // --- State Initialization ---
@@ -380,6 +380,38 @@ const MetronomeUI = () => {
         setGrid(prev => ({ ...prev, [key]: !prev[key] }));
     };
 
+    // Safely change beats-per-cycle and keep `grid` in sync.
+    // New columns default to hi-hat enabled; existing cell values are preserved;
+    // columns beyond the new length are removed.
+    const updateBeatsPerCycle = (newCount) => {
+        setBeatsPerCycle(newCount);
+        setGrid(prev => {
+            const next = { ...prev };
+            // ensure indexes [0..newCount-1] exist; default hi-hat = true
+            for (let i = 0; i < newCount; i++) {
+                const h = `high-${i}`;
+                const m = `mid-${i}`;
+                const l = `low-${i}`;
+                if (!(h in next)) next[h] = true;
+                if (!(m in next)) next[m] = (prev[m] || false);
+                if (!(l in next)) next[l] = (prev[l] || false);
+            }
+            // remove any keys with index >= newCount
+            Object.keys(next).forEach(k => {
+                const parts = k.split('-');
+                if (parts.length === 2) {
+                    const idx = parseInt(parts[1], 10);
+                    if (!isNaN(idx) && idx >= newCount) delete next[k];
+                }
+            });
+            return next;
+        });
+
+        // keep scheduler step within bounds
+        stepRef.current = stepRef.current % newCount;
+        if (currentStep >= newCount) setCurrentStep(-1);
+    };
+
     const handleBpmChange = (e) => {
         const v = parseInt(e.target.value);
         if (!isNaN(v)) setBpm(Math.min(v, MAX_BPM));
@@ -529,9 +561,9 @@ const MetronomeUI = () => {
 
                 <div style={styles.spinBoxContainer}>
                     <div style={styles.spinCol}>
-                        <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.min(prev + 1, 16))}>▲</button>
+                        <button style={styles.spinBtn} onClick={() => updateBeatsPerCycle(Math.min(beatsPerCycle + 1, 16))}>▲</button>
                         <div style={styles.spinValue}>{beatsPerCycle}</div>
-                        <button style={styles.spinBtn} onClick={() => setBeatsPerCycle(prev => Math.max(prev - 1, 1))}>▼</button>
+                        <button style={styles.spinBtn} onClick={() => updateBeatsPerCycle(Math.max(beatsPerCycle - 1, 1))}>▼</button>
                     </div>
                     <div style={styles.spinSlash}>/</div>
                     <div style={styles.spinCol}>
