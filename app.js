@@ -17,41 +17,33 @@ const MetronomeUI = () => {
     };
 
     // --- State Initialization ---
+    // Load saved app data once (used by several initializers)
+    const SAVED = (() => {
+        const s = localStorage.getItem(STORAGE_KEY);
+        if (!s) return {};
+        try { return JSON.parse(s) || {}; } catch (e) { return {}; }
+    })();
+
     const [presets, setPresets] = useState(() => {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-            try {
-                const parsed = JSON.parse(saved);
-                const safePresets = (parsed.presets || [DEFAULT_PRESET]).map(p => ({
-                    ...DEFAULT_PRESET, ...p, subdivision: p.subdivision || 1 
-                }));
-                return safePresets;
-            } catch (e) { return [DEFAULT_PRESET]; }
-        }
-        return [DEFAULT_PRESET];
+        const parsed = SAVED.presets;
+        const safePresets = (parsed || [DEFAULT_PRESET]).map(p => ({ ...DEFAULT_PRESET, ...p, subdivision: p.subdivision || 1 }));
+        return safePresets;
     });
 
-    const [selectedPresetId, setSelectedPresetId] = useState(() => {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-            try {
-                const parsed = JSON.parse(saved);
-                return parsed.selectedId || 'default';
-            } catch (e) { return 'default'; }
-        }
-        return 'default';
-    });
+    const [selectedPresetId, setSelectedPresetId] = useState(() => SAVED.selectedId || 'default');
 
     const currentPreset = presets.find(p => p.id === selectedPresetId) || presets[0];
 
-    // Core State
-    const [bpm, setBpm] = useState(currentPreset.bpm);
-    const [beatsPerCycle, setBeatsPerCycle] = useState(currentPreset.beatsPerCycle);
-    const [subdivision, setSubdivision] = useState(currentPreset.subdivision || 1);
-    const [grid, setGrid] = useState(currentPreset.grid);
+    // Core State (restore from storage where available)
+    const [bpm, setBpm] = useState(() => (SAVED.bpm !== undefined ? SAVED.bpm : currentPreset.bpm));
+    const [beatsPerCycle, setBeatsPerCycle] = useState(() => (SAVED.beatsPerCycle !== undefined ? SAVED.beatsPerCycle : currentPreset.beatsPerCycle));
+    const [subdivision, setSubdivision] = useState(() => (SAVED.subdivision !== undefined ? SAVED.subdivision : currentPreset.subdivision || 1));
+    const [grid, setGrid] = useState(() => (SAVED.grid || currentPreset.grid));
     
     // UI State
-    const [isPlaying, setIsPlaying] = useState(false);
+    // Note: some browsers block autoplay — restoring `isPlaying` updates UI/state but audio
+    // may still require a user gesture to actually start producing sound.
+    const [isPlaying, setIsPlaying] = useState(() => !!SAVED.isPlaying);
     const [currentStep, setCurrentStep] = useState(-1); 
     const [isDragging, setIsDragging] = useState(false);
     const [tapTimes, setTapTimes] = useState([]); 
@@ -80,9 +72,17 @@ const MetronomeUI = () => {
 
     // --- Persistence ---
     useEffect(() => {
-        const dataToSave = { presets, selectedId: selectedPresetId };
+        const dataToSave = {
+            presets,
+            selectedId: selectedPresetId,
+            bpm,
+            beatsPerCycle,
+            subdivision,
+            grid,
+            isPlaying
+        };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
-    }, [presets, selectedPresetId]);
+    }, [presets, selectedPresetId, bpm, beatsPerCycle, subdivision, grid, isPlaying]);
 
     // --- Audio Engine (Enhanced) ---
     const initAudio = () => {
