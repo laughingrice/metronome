@@ -70,6 +70,75 @@ const MetronomeUI = () => {
     useEffect(() => { subRef.current = subdivision; }, [subdivision]);
     useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
+    // --- Service Worker update handling (show in-app "Update available" UI) ---
+    const [updateAvailable, setUpdateAvailable] = useState(false);
+    const [isPwaInstalled, setIsPwaInstalled] = useState(false);
+    const swRegRef = useRef(null);
+
+    useEffect(() => {
+        // detect 'installed as PWA' (covers iOS and other platforms)
+        const checkInstalled = () => {
+            const standalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+            const iosStandalone = window.navigator.standalone === true; // iOS specific
+            setIsPwaInstalled(!!(standalone || iosStandalone));
+        };
+        checkInstalled();
+        window.addEventListener('resize', checkInstalled);
+        window.addEventListener('visibilitychange', checkInstalled);
+
+        return () => { window.removeEventListener('resize', checkInstalled); window.removeEventListener('visibilitychange', checkInstalled); };
+    }, []);
+
+    useEffect(() => {
+        if (!('serviceWorker' in navigator)) return;
+
+        let mounted = true;
+
+        navigator.serviceWorker.getRegistration().then((reg) => {
+            if (!mounted || !reg) return;
+            swRegRef.current = reg;
+
+            // If there's already a waiting worker, an update is ready
+            if (reg.waiting) setUpdateAvailable(true);
+
+            reg.addEventListener('updatefound', () => {
+                const nw = reg.installing;
+                if (!nw) return;
+                nw.addEventListener('statechange', () => {
+                    if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+                        setUpdateAvailable(true);
+                    }
+                });
+            });
+        }).catch(() => {});
+
+        // When the new SW takes control, reload so the app loads the new files
+        const onControllerChange = () => {
+            window.location.reload();
+        };
+        navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
+
+        return () => { mounted = false; navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange); };
+    }, []);
+
+    const applyUpdate = async () => {
+        try {
+            const reg = swRegRef.current || await navigator.serviceWorker.getRegistration();
+            if (reg && reg.waiting) {
+                // For most browsers we can activate immediately
+                reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+            } else if (isPwaInstalled && /iphone|ipad/i.test(navigator.userAgent)) {
+                // iOS Home Screen PWAs require the user to close and re-open the app to pick up updates
+                alert('This PWA is installed on your home screen. To apply the update on iOS please close the app completely and re-open it.');
+            } else {
+                // As a fallback, force a navigation to reload the page from network
+                window.location.reload(true);
+            }
+        } catch (err) {
+            console.warn('Failed to apply update', err);
+        }
+    };
+
     // --- Persistence ---
     useEffect(() => {
         const dataToSave = {
@@ -501,6 +570,8 @@ const MetronomeUI = () => {
         container: { minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px', boxSizing: 'border-box' },
         header: { width: '100%', maxWidth: '500px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px', borderBottom: '1px solid #333', paddingBottom: '15px' },
         buttonGhost: { background: 'transparent', border: '1px solid #444', color: '#aaa', width: '36px', height: '36px', borderRadius: '6px', cursor: 'pointer', marginLeft: '8px', display: 'inline-flex', justifyContent: 'center', alignItems: 'center', transition: 'background 0.2s, border-color 0.2s' },
+        updateBanner: { width: '100%', maxWidth: '500px', background: '#2a2a2a', color: '#fff', borderRadius: '10px', padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', border: '1px solid #333' },
+        updateBtn: { background: '#03DAC6', border: 'none', color: '#121212', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' },
         select: { background: '#1E1E1E', color: '#fff', border: '1px solid #333', padding: '8px', borderRadius: '6px', minWidth: '140px', maxWidth: '200px', outline: 'none' },
         dialWrapper: { position: 'relative', width: '280px', height: '280px', marginBottom: '30px', cursor: isDragging ? 'grabbing' : 'grab', touchAction: 'none' },
         dialTrack: { width: '100%', height: '100%', borderRadius: '50%', background: `conic-gradient(from 180deg at 50% 50%, #121212 0deg, #121212 30deg, #333 30deg, #333 330deg, #121212 330deg)`, position: 'absolute', boxShadow: 'inset 0 0 20px #000, 0 10px 30px rgba(0,0,0,0.5)' },
@@ -539,6 +610,27 @@ const MetronomeUI = () => {
                     <button style={styles.buttonGhost} title="Import from File" onClick={triggerImport}><IconImport /></button>
                 </div>
             </header>
+
+            {updateAvailable && (
+                <div style={styles.updateBanner}>
+                    <div>
+                        {isPwaInstalled ? (
+                            <>
+                                <strong>Update ready for installed PWA</strong>
+                                <div style={{fontSize: 12, color: '#bbb'}}>On iOS: close and re-open the app to apply the update.</div>
+                            </>
+                        ) : (
+                            <>
+                                <div>Update available — reload to use the latest version</div>
+                                <div style={{fontSize: 12, color: '#bbb'}}>Tip: refresh the page or install as PWA for faster updates.</div>
+                            </>
+                        )}
+                    </div>
+                    <div>
+                        <button style={styles.updateBtn} onClick={applyUpdate}>{isPwaInstalled ? 'How to update' : 'Update'}</button>
+                    </div>
+                </div>
+            )}
 
             <div style={styles.dialWrapper} onMouseDown={handleMouseDown} onTouchStart={handleTouchStart}>
                 <div style={styles.dialTrack}></div>
